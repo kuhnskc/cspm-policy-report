@@ -1,0 +1,31 @@
+# Output files
+*.csv
+cspm_*.json
+
+# Temporary files
+*.tmp
+.DS_Store
+
+# Environment files (never commit credentials!)
+.env
+credentials.txt
+config.sh
+
+# Log files
+*.log
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Linux
+*~
+.fuse_hidden*
+.directory
+.Trash-*
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
