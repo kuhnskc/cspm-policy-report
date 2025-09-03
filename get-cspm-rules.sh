@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# CSPM Policy Report - Super Simple Version
+# CSPM Policy Report - With Remediation Steps
 # Just the essentials, no complex jq processing
 
 set -e
@@ -77,7 +77,7 @@ get_policy_ids() {
     printf '%s\n' "${all_ids[@]}"
 }
 
-# Function to process policies - much simpler approach
+# Function to process policies - now with remediation steps
 process_policies_to_csv() {
     local policy_ids=("$@")
     local total_ids=${#policy_ids[@]}
@@ -85,8 +85,8 @@ process_policies_to_csv() {
     
     echo "📊 Processing $total_ids policies in $total_batches batches..."
     
-    # Create CSV header
-    echo "Policy ID,Policy Name,Cloud Provider,Resource Type,Service,Description,Alert Logic" > "$OUTPUT_FILE"
+    # Create CSV header - Added Remediation Steps column
+    echo "Policy ID,Policy Name,Cloud Provider,Resource Type,Service,Description,Alert Logic,Remediation Steps" > "$OUTPUT_FILE"
     
     for ((i=0; i<$total_ids; i+=$BATCH_SIZE)); do
         local batch_num=$((i/BATCH_SIZE + 1))
@@ -119,7 +119,7 @@ process_policies_to_csv() {
             continue
         fi
         
-        # Use the simple approach that worked in our test
+        # Extract data including remediation steps
         echo "$response" | jq -r '.resources[] | 
             .resource_types[] as $rt | 
             [
@@ -129,7 +129,8 @@ process_policies_to_csv() {
                 $rt.resource_type,
                 $rt.service,
                 (.description // "" | gsub("\n"; " ") | gsub("\""; "'"'"'")),
-                (.alert_info // "" | gsub("\n"; " ") | gsub("\\|"; " - ") | gsub("\""; "'"'"'"))
+                (.alert_info // "" | gsub("\n"; " ") | gsub("\\|"; " - ") | gsub("\""; "'"'"'")),
+                (.remediation // "" | gsub("\n"; " ") | gsub("\\|"; " - ") | gsub("\""; "'"'"'"))
             ] | @csv' >> "$OUTPUT_FILE"
         
         local returned_count=$(echo "$response" | jq -r '.resources | length // 0')
@@ -144,8 +145,8 @@ process_policies_to_csv() {
 }
 
 # Main execution
-echo "🚀 CSPM Policy Summary Generator"
-echo "================================"
+echo "🚀 CSPM Policy Summary Generator (with Remediation)"
+echo "===================================================="
 
 # Get policy IDs
 POLICY_IDS=($(get_policy_ids))
