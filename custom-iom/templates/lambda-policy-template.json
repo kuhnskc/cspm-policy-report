@@ -1,0 +1,14 @@
+{
+  "name": "AWS Lambda Security Compliance",
+  "description": "Custom IOM to ensure AWS Lambda functions follow security best practices including proper tagging and secure runtime configuration",
+  "platform": "AWS",
+  "provider": "AWS",
+  "resource_type": "AWS::Lambda::Function",
+  "domain": "CSPM",
+  "subdomain": "IOM",
+  "severity": 2,
+  "logic": "package crowdstrike\n\ndefault result := \"fail\"\n\nhas_tag(tag_name) if {\n    input.tags[tag_name]\n    input.tags[tag_name] != \"\"\n}\n\nsupported_runtimes := [\n    \"python3.9\", \"python3.10\", \"python3.11\", \"python3.12\",\n    \"nodejs18.x\", \"nodejs20.x\"\n]\n\nrequired_tags := [\"Environment\", \"Owner\", \"Project\"]\n\nresult := \"pass\" if {\n    input.resource_type == \"AWS::Lambda::Function\"\n    input.active == true\n    input.cloud_context.runtime in supported_runtimes\n    count([tag | tag := required_tags[_]; has_tag(tag)]) == count(required_tags)\n    input.tags[\"Environment\"] in [\"dev\", \"staging\", \"prod\", \"test\"]\n    input.cloud_context.timeout <= 300\n}",
+  "alert_info": "AWS Lambda function does not meet security compliance requirements",
+  "remediation_info": "Navigate to AWS Lambda console and update function configuration to meet compliance requirements",
+  "attack_types": "Misconfiguration"
+}
