@@ -1,0 +1,14 @@
+{
+  "name": "IAM User MFA Enforcement Policy",
+  "description": "Custom IOM to ensure IAM users have Multi-Factor Authentication enabled for enhanced account security and protection against credential compromise",
+  "platform": "AWS",
+  "provider": "AWS",
+  "resource_type": "AWS::IAM::User",
+  "domain": "CSPM",
+  "subdomain": "IOM",
+  "severity": 2,
+  "logic": "package crowdstrike\\n\\ndefault result := \\"fail\\"\\n\\n# Check if user is a service account\\nis_service_account if {\\n    startswith(input.resource_id, \\"svc-\\")\\n}\\n\\nis_service_account if {\\n    startswith(input.resource_id, \\"service-\\")\\n}\\n\\n# Human users must have MFA enabled\\nresult := \\"pass\\" if {\\n    input.active == true\\n    not is_service_account\\n    input.cloud_context.mfa_enabled == true\\n}\\n\\n# Service accounts with proper naming pass\\nresult := \\"pass\\" if {\\n    input.active == true\\n    is_service_account\\n}\\n\\n# Explicit fail for root user\\nresult := \\"fail\\" if {\\n    input.resource_id == \\"root\\"\\n}",
+  "alert_info": "IAM user does not have Multi-Factor Authentication enabled, creating security vulnerability for potential account compromise and unauthorized access",
+  "remediation_info": "Navigate to AWS IAM console|Select Users from the left navigation menu|Click on the non-compliant username|Go to Security credentials tab|In Multi-factor authentication section click Assign MFA device|Choose Virtual MFA device and follow the setup wizard|Scan QR code with authenticator app (Google Authenticator, Authy, etc.)|Enter two consecutive authentication codes to verify setup|Click Assign MFA to complete the configuration|Test MFA login to ensure proper functionality",
+  "attack_types": "Credential Compromise"
+}

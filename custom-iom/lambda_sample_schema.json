@@ -1,0 +1,42 @@
+{
+  "resource_type": "AWS::Lambda::Function",
+  "resource_id": "customer-api-function",
+  "active": true,
+  "region": "us-east-1",
+  "account_id": "123456789012",
+  "cloud_context": {
+    "function_name": "customer-api-function",
+    "runtime": "python3.11",
+    "timeout": 30,
+    "memory_size": 512,
+    "role": "arn:aws:iam::123456789012:role/CustomerAPILambdaRole",
+    "environment": {
+      "variables": {
+        "LOG_LEVEL": "INFO",
+        "DATABASE_URL": "postgres://customerdb.amazonaws.com:5432/prod",
+        "REGION": "us-east-1"
+      }
+    },
+    "vpc_config": {
+      "vpc_id": "vpc-12345678",
+      "subnet_ids": ["subnet-12345", "subnet-67890"],
+      "security_group_ids": ["sg-lambda123"]
+    },
+    "dead_letter_config": {
+      "target_arn": "arn:aws:sqs:us-east-1:123456789012:lambda-dlq"
+    },
+    "reserved_concurrency": 10,
+    "layers": [],
+    "code_sha256": "abc123def456...",
+    "code_size": 1024000
+  },
+  "tags": {
+    "Environment": "prod",
+    "Owner": "engineering-team",
+    "Project": "customer-portal",
+    "CostCenter": "engineering",
+    "FunctionType": "api"
+  },
+  "creation_time": "2024-10-20T10:30:00Z",
+  "last_modified": "2024-10-24T09:15:00Z"
+}
