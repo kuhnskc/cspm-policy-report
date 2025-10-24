@@ -207,9 +207,9 @@ custom-iom/
 ### API Permissions Required
 
 Your Falcon API client needs these scopes:
-- `cloud-security-assessment:read` - For asset discovery
-- `cloud-policies:read` - For reading existing policies
-- `cloud-policies:write` - For creating Custom IOMs
+- `Cloud Security API Assets:READ` - For asset discovery
+- `Cloud Security Policies:READ` - For reading existing policies
+- `Cloud Security Policies:WRITE` - For creating Custom IOMs
 
 ### Setting Up Credentials
 
