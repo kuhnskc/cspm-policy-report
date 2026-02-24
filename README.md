@@ -1,59 +1,54 @@
 # CSPM Policy Report Generator
 
-A bash script to retrieve and export CrowdStrike CSPM (Cloud Security Posture Management) policy details via the Falcon API.
+Scripts to retrieve and export CrowdStrike CSPM (Cloud Security Posture Management) policy details via the Falcon API. Generates four separate CSV reports covering **IOMs** (cloud misconfigurations), **IOAs** (behavioral detections), **IAC rules** (infrastructure-as-code / container / API security), and **Cloud Risks** (toxic combinations).
 
 ## Overview
 
-This script generates a comprehensive CSV report of all CSPM policies in your CrowdStrike environment, including:
-- Policy ID and Name
-- Cloud Provider (AWS, Azure, GCP, OCI, General)
-- Resource Type and Service
-- Policy Description
-- Alert Logic
+This tool generates comprehensive CSV reports of all CSPM policies in your CrowdStrike environment:
 
-## Quick Start (One-liner)
+- **IOM Report** — Indicators of Misconfiguration (default and custom cloud configuration policies)
+- **IOA Report** — Indicators of Attack (behavioral detection policies with MITRE ATT&CK-aligned attack types)
+- **IAC Report** — Infrastructure-as-Code rules (Kubernetes, Docker, Helm, OpenAPI/Swagger, ASPM, and other non-cloud-native policies)
+- **Cloud Risks Report** — Cloud security risks / toxic combinations (deduplicated rules with finding counts)
 
-You can run the script directly without cloning the repository:
+## Quick Start
 
 ```bash
 # Set your credentials
 export FALCON_CLIENT_ID="your_client_id_here"
 export FALCON_CLIENT_SECRET="your_client_secret_here"
 
-# Download and run the script
-curl -s https://raw.githubusercontent.com/kuhnskc/cspm-policy-report/main/get-cspm-rules.sh | bash
+# Python (recommended — ~9s with concurrent requests)
+python3 get-cspm-rules.py
+
+# Bash (alternative — ~2.5 min, sequential)
+bash get-cspm-rules.sh
+```
+
+### One-liner (no clone required)
+
+```bash
+curl -s https://raw.githubusercontent.com/kuhnskc/cspm-policy-report/main/get-cspm-rules.py | python3
 ```
 
 ## Prerequisites
 
-- **CrowdStrike Falcon API credentials** with CSPM read permissions
-- **curl** - for API calls
-- **jq** - for JSON processing
-- **bash** - script interpreter
+### Python version (recommended)
+- **python3** (3.7+) — no external dependencies, uses only the standard library
 
-## Installation Methods
+### Bash version
+- **curl** — for API calls
+- **jq** — for JSON processing
+- **python3** — for policy classification and summary statistics
 
-### Method 1: Direct execution (recommended for one-time use)
-```bash
-curl -s https://raw.githubusercontent.com/kuhnskc/cspm-policy-report/main/get-cspm-rules.sh | bash
-```
+## Installation
 
-### Method 2: Download and run
-```bash
-curl -O https://raw.githubusercontent.com/kuhnskc/cspm-policy-report/main/get-cspm-rules.sh
-chmod +x get-cspm-rules.sh
-./get-cspm-rules.sh
-```
-
-### Method 3: Clone repository
 ```bash
 git clone https://github.com/kuhnskc/cspm-policy-report.git
 cd cspm-policy-report
-chmod +x get-cspm-rules.sh
-./get-cspm-rules.sh
 ```
 
-## Setup (for local installation)
+## Setup
 
 1. Set your Falcon API credentials as environment variables:
 ```bash
@@ -61,88 +56,115 @@ export FALCON_CLIENT_ID="your_client_id_here"
 export FALCON_CLIENT_SECRET="your_client_secret_here"
 ```
 
-2. Make the script executable:
+2. Optionally set a custom base URL (defaults to `https://api.crowdstrike.com`):
 ```bash
-chmod +x get-cspm-rules.sh
+export FALCON_BASE_URL="https://api.us-2.crowdstrike.com"
 ```
 
 ## Usage
 
 ```bash
-./get-cspm-rules.sh
+# Python (recommended)
+python3 get-cspm-rules.py
+
+# Bash
+bash get-cspm-rules.sh
 ```
 
-The script will:
+Both scripts will:
 1. Authenticate with the Falcon API
-2. Retrieve all policy IDs (with pagination)
-3. Fetch detailed policy information in batches
-4. Generate a timestamped CSV file: `cspm_policy_summary_YYYYMMDD_HHMMSS.csv`
+2. Fetch `settings/entities/policy/v1` to get IOA (Behavioral) policies and build a Configuration policy name list for classification
+3. Retrieve all cloud-policy IDs via `cloud-policies/queries/rules/v1` (with pagination)
+4. Fetch detailed cloud-policy information in batches via `cloud-policies/entities/rules/v1`
+5. Classify each cloud-policy as **IOM** (exists in settings Configuration) or **IAC** (does not)
+6. Fetch cloud risks via `cloud-security-risks/combined/cloud-risks/v1` and deduplicate by rule
+7. Generate four timestamped CSV files and display summary statistics
 
-## Output
+### Output Files
 
-The CSV contains the following columns:
-- **Policy ID**: Unique identifier for the policy
-- **Policy Name**: Human-readable policy name
-- **Cloud Provider**: AWS, Azure, GCP, OCI, General, etc.
-- **Resource Type**: Specific cloud resource type (e.g., AWS::S3::Bucket)
-- **Service**: Cloud service category (e.g., S3, EC2, Virtual Machines)
-- **Description**: Detailed policy description
-- **Alert Logic**: Step-by-step detection logic
+| File | Contents | 
+|---|---|
+| `cspm_iom_report_TIMESTAMP.csv` | Cloud misconfigurations (AWS, Azure, GCP, OCI)
+| `cspm_ioa_report_TIMESTAMP.csv` | Behavioral detections (AWS, Azure) 
+| `cspm_iac_report_TIMESTAMP.csv` | IAC / container / API security rules
+| `cspm_cloud_risks_report_TIMESTAMP.csv` | Cloud risks / toxic combinations 
 
-## Sample Output
+### Performance Comparison
 
-```csv
-Policy ID,Policy Name,Cloud Provider,Resource Type,Service,Description,Alert Logic
-"f934cb89-32c8-4d67-9e88-0c3f446062d8","Virtual Machine allows public internet access to Docker","Azure","Microsoft.Compute/virtualMachines","Virtual Machines","Allowing ingress network traffic from the global IP space...","1. List all Virtual Machines with associated public IPs..."
-```
+| | Python | Bash |
+|---|---|---|
+| Batch size | 100 | 25 |
+| Concurrency | 5 parallel workers | Sequential |
+| Typical runtime | ~9 seconds | ~2.5 minutes |
+| Dependencies | python3 (stdlib only) | curl, jq, python3 |
 
-## Supported Cloud Providers
+## CSV Columns
 
-The script automatically detects and reports policies for all cloud providers supported by CrowdStrike CSPM:
-- **AWS** (Amazon Web Services)
-- **Azure** (Microsoft Azure)
-- **GCP** (Google Cloud Platform)
-- **OCI** (Oracle Cloud Infrastructure)
-- **General** (Multi-cloud/generic policies)
+### IOM / IOA / IAC Reports
 
-## Features
+| Column | Description | IOMs | IOAs | IAC |
+|--------|-------------|------|------|-----|
+| **Policy ID** | Unique identifier (UUID for IOMs/IAC, integer for IOAs) | Yes | Yes | Yes |
+| **Policy Name** | Human-readable policy name | Yes | Yes | Yes |
+| **Cloud Provider** | AWS, Azure, GCP, OCI, General, ASPM | Yes | Yes | Yes |
+| **Resource Type** | Cloud resource type or asset type | Yes | Yes | Yes |
+| **Service** | Cloud service category (e.g., S3, EC2, Identity) | Yes | Yes | Yes |
+| **Origin** | `Default` or `Custom` | Yes | Yes | Yes |
+| **Policy Type** | `IOM`, `IOA`, or `IAC` | Yes | Yes | Yes |
+| **Description** | Detailed policy description | Yes | — | Yes |
+| **Alert Logic** | Step-by-step detection logic | Yes | — | Yes |
+| **Remediation Steps** | How to remediate findings | Yes | — | Yes |
+| **Attack Types** | MITRE-aligned attack categories | — | Yes | — |
 
-- **Batch processing** - Handles large numbers of policies efficiently
-- **Progress tracking** - Shows real-time progress during execution
-- **Error handling** - Graceful handling of API errors and rate limits
-- **Clean output** - Properly formatted CSV with escaped special characters
-- **Summary statistics** - Shows policy counts by cloud provider
-- **One-liner execution** - Run directly from GitHub without cloning
+### Cloud Risks Report
+
+| Column | Description |
+|--------|-------------|
+| **Rule ID** | Unique rule identifier (UUID) |
+| **Rule Name** | Human-readable rule name (e.g., "Unused identity with excessive permissions") |
+| **Severity** | `Low`, `Medium`, or `High` |
+| **Cloud Provider** | AWS, Azure, GCP (semicolon-separated if multiple) |
+| **Service Category** | Identity, Compute, Data, etc. |
+| **Insight Categories** | Identity, Network, Vulnerabilities, Data, etc. |
+| **Risk Factors** | Contributing risk factors (e.g., "Unused Identity; Excessive infra permissions") |
+| **Description** | Detailed rule description |
+| **Finding Count** | Total number of findings for this rule |
+| **Open Count** | Number of currently open findings |
+| **Resolved Count** | Number of resolved findings |
+
+## How Classification Works
+
+The script uses a cross-reference approach to separate cloud IOMs from IAC rules:
+
+1. **IOAs**: Policies from `settings/entities/policy/v1` with `policy_type == "Behavioral"` — these are behavioral detections that don't exist in the cloud-policies endpoint
+2. **IOMs**: Cloud-policies whose name matches a Configuration policy in `settings/entities/policy/v1` — these are cloud-native misconfigurations (e.g., S3 bucket public access, CloudTrail disabled)
+3. **IAC**: Everything else from cloud-policies — Kubernetes, Docker, Helm, OpenAPI/Swagger, ASPM, and other non-cloud-native rules
+4. **Cloud Risks**: Fetched from a separate endpoint (`cloud-security-risks/combined/cloud-risks/v1`) — these are toxic combinations representing multi-factor security risks (e.g., "Unused identity with excessive permissions"). The endpoint returns per-asset findings which are deduplicated by `rule_id` to produce unique rules
+
 
 ## API Permissions Required
 
 Your Falcon API client needs the following scopes:
-- `cloud-policies:read`
+- `Cloud Security Policies:read` — for IOM and IAC policies
+- `Cloud Security API Risks:read` — for IOA (Behavioral) policies and IOM classification
 
 ## Troubleshooting
 
 ### Authentication Issues
 - Verify your `FALCON_CLIENT_ID` and `FALCON_CLIENT_SECRET` are correct
-- Ensure your API client has the required permissions
+- Ensure your API client has the required permissions (all three scopes listed above)
 
-### Rate Limiting
-The script includes built-in delays to respect API rate limits. If you encounter 429 errors, the script will automatically retry.
-
-### Large Environments
-For environments with thousands of policies, the script may take several minutes to complete. Progress is shown throughout execution.
+### Non-US-1 Cloud Regions
+Set the `FALCON_BASE_URL` environment variable to your region's API base URL:
+```bash
+export FALCON_BASE_URL="https://api.us-2.crowdstrike.com"  # US-2
+export FALCON_BASE_URL="https://api.eu-1.crowdstrike.com"  # EU-1
+```
 
 ### Missing Dependencies
-- **curl**: Usually pre-installed on most systems
-- **jq**: Install with `brew install jq` (macOS) or `apt-get install jq` (Ubuntu/Debian)
-
-## Contributing
-
-Feel free to submit issues and enhancement requests!
+- **python3**: Usually pre-installed on macOS and Linux
+- **jq** (bash version only): Install with `brew install jq` (macOS) or `apt-get install jq` (Ubuntu/Debian)
 
 ## Disclaimer
 
 This is an unofficial, community-created tool and is not affiliated with or officially supported by CrowdStrike. Use at your own risk. Always review and test scripts in a non-production environment before use.
-
-## License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
