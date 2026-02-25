@@ -1,28 +1,59 @@
 #!/bin/bash
 
-# CSPM Policy Report - IOMs, IOAs, IAC Rules, and Cloud Risks
-# Generates four separate CSV reports:
+# CSPM Policy Report - IOMs, IOAs, Insights, IAC Rules, and Cloud Risks
+# Generates five separate CSV reports:
 #   - IOM: Cloud misconfigurations (default + custom)
 #   - IOA: Behavioral detections (indicators of attack)
+#   - Insights: Identity, exposure, sensitivity, and ASPM insights
 #   - IAC: Infrastructure-as-code / container / API security rules
 #   - Cloud Risks: Toxic combinations / cloud security risks
 
 set -e
+
+# ──────────────────────────────────────────────
+# Parse CLI arguments
+# ──────────────────────────────────────────────
+
+PROVIDER_FILTER=""
+SORT_BY_ID=false
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --provider)
+            PROVIDER_FILTER="$2"
+            shift 2
+            ;;
+        --sort-by-id)
+            SORT_BY_ID=true
+            shift
+            ;;
+        -h|--help)
+            echo "Usage: bash get-cspm-rules.sh [OPTIONS]"
+            echo ""
+            echo "Options:"
+            echo "  --provider VALUE   Filter results to a specific cloud provider (AWS, Azure, GCP, OCI)"
+            echo "  --sort-by-id       Sort rows by Policy ID / Rule ID"
+            echo "  -h, --help         Show this help message"
+            exit 0
+            ;;
+        *)
+            echo "Unknown option: $1"
+            exit 1
+            ;;
+    esac
+done
 
 # Configuration
 BATCH_SIZE=25
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 IOM_FILE="cspm_iom_report_${TIMESTAMP}.csv"
 IOA_FILE="cspm_ioa_report_${TIMESTAMP}.csv"
+INSIGHT_FILE="cspm_insights_report_${TIMESTAMP}.csv"
 IAC_FILE="cspm_iac_report_${TIMESTAMP}.csv"
 RISK_FILE="cspm_cloud_risks_report_${TIMESTAMP}.csv"
 CSV_HEADER="Policy ID,Policy Name,Cloud Provider,Resource Type,Service,Origin,Policy Type,Description,Alert Logic,Remediation Steps,Attack Types"
 RISK_CSV_HEADER="Rule ID,Rule Name,Severity,Cloud Provider,Service Category,Insight Categories,Risk Factors,Description,Finding Count,Open Count,Resolved Count"
 BASE_URL="${FALCON_BASE_URL:-https://api.crowdstrike.com}"
-
-# Temp file for settings Configuration names (used for classification)
-CONFIG_NAMES_FILE=$(mktemp)
-trap "rm -f $CONFIG_NAMES_FILE" EXIT
 
 # Check environment variables
 if [[ -z "$FALCON_CLIENT_ID" || -z "$FALCON_CLIENT_SECRET" ]]; then
@@ -50,10 +81,10 @@ fi
 echo "✅ Bearer token retrieved"
 
 # ──────────────────────────────────────────────
-# SECTION 1: Settings (classification + IOAs)
+# SECTION 1: Settings (IOAs)
 # ──────────────────────────────────────────────
 
-echo "📋 Fetching settings policies for classification..."
+echo "📋 Fetching settings policies for IOAs..."
 
 SETTINGS_RESPONSE=$(curl \
     --header "Authorization: Bearer ${BEARER_TOKEN}" \
@@ -61,11 +92,6 @@ SETTINGS_RESPONSE=$(curl \
     --silent \
     --fail \
     "${BASE_URL}/settings/entities/policy/v1")
-
-# Extract Configuration names for classification
-echo "$SETTINGS_RESPONSE" | jq -r '[.resources[] | select(.policy_type == "Configuration")] | .[].name' > "$CONFIG_NAMES_FILE"
-CONFIG_COUNT=$(wc -l < "$CONFIG_NAMES_FILE" | tr -d ' ')
-echo "✅ Settings: $CONFIG_COUNT Configuration names loaded"
 
 # Write IOA CSV
 echo "$CSV_HEADER" > "$IOA_FILE"
@@ -91,7 +117,7 @@ echo "$SETTINGS_RESPONSE" | jq -r '
 echo "   ✅ Processed $IOA_COUNT IOAs"
 
 # ──────────────────────────────────────────────
-# SECTION 2: Cloud-policies (IOMs + IAC)
+# SECTION 2: Cloud-policies (IOMs, Insights, IAC)
 # ──────────────────────────────────────────────
 
 get_cloud_policy_ids() {
@@ -143,6 +169,7 @@ process_cloud_policies() {
 
     # Initialize CSV files
     echo "$CSV_HEADER" > "$IOM_FILE"
+    echo "$CSV_HEADER" > "$INSIGHT_FILE"
     echo "$CSV_HEADER" > "$IAC_FILE"
 
     for ((i=0; i<$total_ids; i+=$BATCH_SIZE)); do
@@ -173,29 +200,31 @@ process_cloud_policies() {
             continue
         fi
 
-        # Classify each policy: name in config names → IOM, else → IAC
-        # Use python for reliable name matching against the config names file
+        # Classify each policy by subdomain field
         echo "$response" | python3 -c "
 import csv, json, sys, io
 
-config_names = set()
-with open('$CONFIG_NAMES_FILE') as f:
-    for line in f:
-        config_names.add(line.strip())
-
 data = json.load(sys.stdin)
 iom_out = io.StringIO()
+insight_out = io.StringIO()
 iac_out = io.StringIO()
 iom_writer = csv.writer(iom_out)
+insight_writer = csv.writer(insight_out)
 iac_writer = csv.writer(iac_out)
 
 for r in data.get('resources', []):
     name = r.get('name', '')
+    subdomain = r.get('subdomain', '')
     for rt in r.get('resource_types', [{}]):
         desc = (r.get('description') or '').replace('\n', ' ')
         alert = (r.get('alert_info') or '').replace('\n', ' ').replace('|', ' - ')
         remed = (r.get('remediation') or '').replace('\n', ' ').replace('|', ' - ')
-        ptype = 'IOM' if name in config_names else 'IAC'
+        if subdomain == 'Insight':
+            ptype = 'Insight'
+        elif subdomain == 'IAC':
+            ptype = 'IAC'
+        else:
+            ptype = 'IOM'
         row = [
             r.get('uuid', ''),
             name,
@@ -206,20 +235,27 @@ for r in data.get('resources', []):
             ptype,
             desc, alert, remed, '',
         ]
-        if ptype == 'IOM':
-            iom_writer.writerow(row)
-        else:
+        if ptype == 'Insight':
+            insight_writer.writerow(row)
+        elif ptype == 'IAC':
             iac_writer.writerow(row)
+        else:
+            iom_writer.writerow(row)
 
 iom_text = iom_out.getvalue()
+insight_text = insight_out.getvalue()
 iac_text = iac_out.getvalue()
 if iom_text:
     sys.stdout.write('IOM:' + iom_text)
+if insight_text:
+    sys.stdout.write('INSIGHT:' + insight_text)
 if iac_text:
     sys.stdout.write('IAC:' + iac_text)
 " | while IFS= read -r line; do
             if [[ "$line" == IOM:* ]]; then
                 echo "${line#IOM:}" >> "$IOM_FILE"
+            elif [[ "$line" == INSIGHT:* ]]; then
+                echo "${line#INSIGHT:}" >> "$INSIGHT_FILE"
             elif [[ "$line" == IAC:* ]]; then
                 echo "${line#IAC:}" >> "$IAC_FILE"
             else
@@ -242,11 +278,17 @@ if iac_text:
 # ──────────────────────────────────────────────
 
 echo ""
-echo "🚀 CSPM Policy Report — IOMs + IOAs + IAC + Cloud Risks"
-echo "===================================================="
+echo "🚀 CSPM Policy Report — IOMs + IOAs + Insights + IAC + Cloud Risks"
+echo "===================================================================="
+if [[ -n "$PROVIDER_FILTER" ]]; then
+    echo "   Provider filter: $PROVIDER_FILTER"
+fi
+if [[ "$SORT_BY_ID" == true ]]; then
+    echo "   Sort: by Policy/Rule ID"
+fi
 echo ""
 
-# Get and process cloud-policies (IOMs + IAC)
+# Get and process cloud-policies (IOMs, Insights, IAC)
 CP_IDS=($(get_cloud_policy_ids))
 process_cloud_policies "${CP_IDS[@]}"
 
@@ -350,6 +392,57 @@ print(f'{len(findings)} findings -> {len(rules)} unique rules', file=sys.stderr)
 " >> "$RISK_FILE"
 
 # ──────────────────────────────────────────────
+# Filter and sort (if requested)
+# ──────────────────────────────────────────────
+
+if [[ -n "$PROVIDER_FILTER" ]] || [[ "$SORT_BY_ID" == true ]]; then
+    echo ""
+    [[ -n "$PROVIDER_FILTER" ]] && echo "🔍 Filtering to provider: $PROVIDER_FILTER"
+    [[ "$SORT_BY_ID" == true ]] && echo "🔃 Sorting by ID"
+
+    python3 -c "
+import csv, sys, os
+
+provider_filter = '$PROVIDER_FILTER'.upper() if '$PROVIDER_FILTER' else None
+sort_by_id = '$SORT_BY_ID' == 'true'
+
+# Provider normalization
+pmap = {'AWS': 'AWS', 'AZURE': 'Azure', 'GCP': 'GCP', 'OCI': 'OCI'}
+if provider_filter:
+    provider_filter = pmap.get(provider_filter, provider_filter)
+
+for filepath in ['$IOM_FILE', '$IOA_FILE', '$INSIGHT_FILE', '$IAC_FILE']:
+    with open(filepath) as f:
+        reader = csv.reader(f)
+        header = next(reader)
+        rows = list(reader)
+    if provider_filter:
+        rows = [r for r in rows if r[2].upper() == provider_filter.upper()]
+    if sort_by_id:
+        rows.sort(key=lambda r: r[0])
+    with open(filepath, 'w', newline='') as f:
+        writer = csv.writer(f)
+        writer.writerow(header)
+        writer.writerows(rows)
+
+# Cloud Risks CSV
+filepath = '$RISK_FILE'
+with open(filepath) as f:
+    reader = csv.reader(f)
+    header = next(reader)
+    rows = list(reader)
+if provider_filter:
+    rows = [r for r in rows if provider_filter.upper() in r[3].upper()]
+if sort_by_id:
+    rows.sort(key=lambda r: r[0])
+with open(filepath, 'w', newline='') as f:
+    writer = csv.writer(f)
+    writer.writerow(header)
+    writer.writerows(rows)
+"
+fi
+
+# ──────────────────────────────────────────────
 # Summary
 # ──────────────────────────────────────────────
 
@@ -362,6 +455,7 @@ import csv, collections
 for label, filepath in [
     ('IOM (Cloud Misconfigurations)', '$IOM_FILE'),
     ('IOA (Behavioral Detections)', '$IOA_FILE'),
+    ('Insights (Identity/Exposure/ASPM)', '$INSIGHT_FILE'),
     ('IAC (Infrastructure-as-Code)', '$IAC_FILE'),
 ]:
     with open(filepath) as f:
@@ -387,7 +481,7 @@ for col_label, key in [('Severity', 'Severity'), ('Service Category', 'Service C
 
 total = sum(
     sum(1 for _ in csv.DictReader(open(f)))
-    for f in ['$IOM_FILE', '$IOA_FILE', '$IAC_FILE', '$RISK_FILE']
+    for f in ['$IOM_FILE', '$IOA_FILE', '$INSIGHT_FILE', '$IAC_FILE', '$RISK_FILE']
 )
 print(f'\n📊 Total across all reports: {total}')
 "

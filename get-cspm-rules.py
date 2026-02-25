@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
 """
-CSPM Policy Report - IOMs, IOAs, IAC Rules, and Cloud Risks
-Generates four separate CSV reports:
+CSPM Policy Report - IOMs, IOAs, Insights, IAC Rules, and Cloud Risks
+Generates five separate CSV reports:
   - IOM: Cloud misconfigurations (default + custom)
   - IOA: Behavioral detections (indicators of attack)
+  - Insights: Identity, exposure, sensitivity, and ASPM insights
   - IAC: Infrastructure-as-code / container / API security rules
   - Cloud Risks: Toxic combinations / cloud security risks
 Uses concurrent requests for fast execution.
 """
 
+import argparse
 import csv
 import json
 import os
@@ -81,24 +83,19 @@ def api_get(token, path):
 
 
 # ──────────────────────────────────────────────
-# Settings endpoint (classification + IOAs)
+# Settings endpoint (IOAs)
 # ──────────────────────────────────────────────
 
-def get_settings_policies(token):
-    """Fetch settings/entities/policy/v1. Returns (config_names, ioa_rows)."""
-    print("📋 Fetching settings policies for classification...")
+def get_ioa_policies(token):
+    """Fetch settings/entities/policy/v1. Returns ioa_rows."""
+    print("📋 Fetching settings policies for IOAs...")
     data = api_get(token, "/settings/entities/policy/v1")
     resources = data.get("resources", [])
 
-    # Build set of Configuration policy names — used to classify cloud-policies
-    config_names = set()
     ioa_rows = []
 
     for r in resources:
-        ptype = r.get("policy_type", "")
-        if ptype == "Configuration":
-            config_names.add(r.get("name", ""))
-        elif ptype == "Behavioral":
+        if r.get("policy_type", "") == "Behavioral":
             provider = r.get("cloud_provider", "")
             provider = PROVIDER_MAP.get(provider, provider.upper())
             attack_types = "; ".join(r.get("attack_types") or [])
@@ -116,12 +113,12 @@ def get_settings_policies(token):
                 attack_types,
             ])
 
-    print(f"✅ Settings: {len(config_names)} Configuration names, {len(ioa_rows)} IOAs")
-    return config_names, ioa_rows
+    print(f"✅ Settings: {len(ioa_rows)} IOAs")
+    return ioa_rows
 
 
 # ──────────────────────────────────────────────
-# Cloud-policies endpoint (IOMs + IAC)
+# Cloud-policies endpoint (IOMs, Insights, IAC)
 # ──────────────────────────────────────────────
 
 def get_cloud_policy_ids(token):
@@ -146,12 +143,13 @@ def get_cloud_policy_ids(token):
 
 
 def fetch_cloud_policy_batch(token, batch_ids, batch_num, total_batches):
-    """Fetch a single batch of cloud-policy details. Returns list of (name, row) tuples."""
+    """Fetch a single batch of cloud-policy details. Returns list of (subdomain, row) tuples."""
     params = "&".join(f"ids={uid}" for uid in batch_ids)
     data = api_get(token, f"/cloud-policies/entities/rules/v1?{params}")
     results = []
     for r in data.get("resources", []):
         name = r.get("name", "")
+        subdomain = r.get("subdomain", "")
         for rt in r.get("resource_types", [{}]):
             desc = (r.get("description") or "").replace("\n", " ")
             alert = (r.get("alert_info") or "").replace("\n", " ").replace("|", " - ")
@@ -169,7 +167,7 @@ def fetch_cloud_policy_batch(token, batch_ids, batch_num, total_batches):
                 remed,
                 "",
             ]
-            results.append((name, row))
+            results.append((subdomain, row))
     return batch_num, len(data.get("resources", [])), results
 
 
@@ -293,20 +291,44 @@ def print_breakdown(label, rows, idx):
 # ──────────────────────────────────────────────
 
 def main():
+    parser = argparse.ArgumentParser(
+        description="Generate CSPM policy reports from the CrowdStrike Falcon API.",
+    )
+    parser.add_argument(
+        "--provider",
+        help="Filter results to a specific cloud provider (e.g., AWS, Azure, GCP, OCI)",
+    )
+    parser.add_argument(
+        "--sort-by-id",
+        action="store_true",
+        help="Sort rows by Policy ID / Rule ID instead of the default order",
+    )
+    args = parser.parse_args()
+
+    provider_filter = args.provider.upper() if args.provider else None
+    # Normalise common aliases so "aws" matches "AWS", etc.
+    if provider_filter:
+        provider_filter = PROVIDER_MAP.get(provider_filter.lower(), provider_filter)
+
     start_time = time.time()
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     iom_file = f"cspm_iom_report_{timestamp}.csv"
     ioa_file = f"cspm_ioa_report_{timestamp}.csv"
+    insight_file = f"cspm_insights_report_{timestamp}.csv"
     iac_file = f"cspm_iac_report_{timestamp}.csv"
     risk_file = f"cspm_cloud_risks_report_{timestamp}.csv"
 
-    print("🚀 CSPM Policy Report — IOMs + IOAs + IAC + Cloud Risks")
-    print("=" * 56)
+    print("🚀 CSPM Policy Report — IOMs + IOAs + Insights + IAC + Cloud Risks")
+    print("=" * 66)
+    if provider_filter:
+        print(f"   Provider filter: {provider_filter}")
+    if args.sort_by_id:
+        print("   Sort: by Policy/Rule ID")
 
     token = get_bearer_token()
 
-    # Step 1: Fetch settings policies (for classification + IOAs)
-    config_names, ioa_rows = get_settings_policies(token)
+    # Step 1: Fetch IOA (Behavioral) policies from settings
+    ioa_rows = get_ioa_policies(token)
 
     print()
     print("─" * 38)
@@ -316,16 +338,20 @@ def main():
     cp_ids = get_cloud_policy_ids(token)
     cp_results = get_all_cloud_policies(token, cp_ids)
 
-    # Step 3: Classify cloud-policies into IOM vs IAC
+    # Step 3: Classify cloud-policies by subdomain
     iom_rows = []
+    insight_rows = []
     iac_rows = []
-    for name, row in cp_results:
-        if name in config_names:
-            row[6] = "IOM"
-            iom_rows.append(row)
-        else:
+    for subdomain, row in cp_results:
+        if subdomain == "Insight":
+            row[6] = "Insight"
+            insight_rows.append(row)
+        elif subdomain == "IAC":
             row[6] = "IAC"
             iac_rows.append(row)
+        else:
+            row[6] = "IOM"
+            iom_rows.append(row)
 
     # Step 4: Fetch cloud risks (toxic combinations)
     print()
@@ -333,9 +359,28 @@ def main():
     print()
     risk_rows = get_cloud_risks(token)
 
-    # Step 5: Write CSVs
+    # Step 5: Apply filters and sorting
+    if provider_filter:
+        print()
+        print(f"🔍 Filtering to provider: {provider_filter}")
+        iom_rows = [r for r in iom_rows if r[2].upper() == provider_filter.upper()]
+        ioa_rows = [r for r in ioa_rows if r[2].upper() == provider_filter.upper()]
+        insight_rows = [r for r in insight_rows if r[2].upper() == provider_filter.upper()]
+        iac_rows = [r for r in iac_rows if r[2].upper() == provider_filter.upper()]
+        # Cloud Risks: provider column (idx 3) is semicolon-separated
+        risk_rows = [r for r in risk_rows if provider_filter.upper() in str(r[3]).upper()]
+
+    if args.sort_by_id:
+        iom_rows.sort(key=lambda r: r[0])
+        ioa_rows.sort(key=lambda r: r[0])
+        insight_rows.sort(key=lambda r: r[0])
+        iac_rows.sort(key=lambda r: r[0])
+        risk_rows.sort(key=lambda r: r[0])
+
+    # Step 6: Write CSVs
     write_csv(iom_file, iom_rows)
     write_csv(ioa_file, ioa_rows)
+    write_csv(insight_file, insight_rows)
     write_csv(iac_file, iac_rows)
     write_csv(risk_file, risk_rows, headers=CLOUD_RISK_HEADERS)
 
@@ -350,6 +395,7 @@ def main():
     for label, filepath, rows in [
         ("IOM (Cloud Misconfigurations)", iom_file, iom_rows),
         ("IOA (Behavioral Detections)", ioa_file, ioa_rows),
+        ("Insights (Identity/Exposure/ASPM)", insight_file, insight_rows),
         ("IAC (Infrastructure-as-Code)", iac_file, iac_rows),
     ]:
         print(f"📄 {label}: {filepath} ({len(rows)} rows)")
@@ -362,7 +408,7 @@ def main():
     print_breakdown("Service Category", risk_rows, 4)
     print()
 
-    total = len(iom_rows) + len(ioa_rows) + len(iac_rows) + len(risk_rows)
+    total = len(iom_rows) + len(ioa_rows) + len(insight_rows) + len(iac_rows) + len(risk_rows)
     print(f"📊 Total across all reports: {total}")
 
 
